@@ -1,0 +1,2 @@
+/home/tspi/sdk/buildroot/output/rockchip_rk3566/host/bin/aarch64-buildroot-linux-gnu-ar qc ../lib/libittnotify.a  CMakeFiles/ittnotify.dir/src/ittnotify/ittnotify_static.c.o CMakeFiles/ittnotify.dir/src/ittnotify/jitprofiling.c.o
+/home/tspi/sdk/buildroot/output/rockchip_rk3566/host/bin/aarch64-buildroot-linux-gnu-ranlib ../lib/libittnotify.a
