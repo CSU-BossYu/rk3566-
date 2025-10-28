@@ -13,3 +13,5 @@ build/
 # DRM/RGA临时文件
 drm/*.tmp
 rga/*.tmp
+# VS Code 本地缓存文件
+.vscode/
