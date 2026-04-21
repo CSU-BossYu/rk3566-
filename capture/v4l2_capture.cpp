@@ -1,5 +1,6 @@
 #include "v4l2_capture.h"
 
+// V4L2 核心头文件
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/videodev2.h>
@@ -9,11 +10,10 @@
 #include <time.h>
 #include <unistd.h>
 
+// C++ 基础库
 #include <cstring>
 #include <string>
 #include <iostream>
-
-// -------- helpers --------
 
 static std::string errno_str(const std::string& what) {
     return what + " errno=" + std::to_string(errno) + " (" + std::string(strerror(errno)) + ")";
@@ -41,12 +41,10 @@ static int default_stride_bytes(int width, uint32_t pixfmt) {
         case V4L2_PIX_FMT_UYVY: return width * 2;
         case V4L2_PIX_FMT_RGB24: return width * 3;
         case V4L2_PIX_FMT_BGR24: return width * 3;
-        case V4L2_PIX_FMT_NV12: return width; // luma stride
+        case V4L2_PIX_FMT_NV12: return width;
         default: return 0;
     }
 }
-
-// -------- Frame RAII --------
 
 V4L2Capture::Frame::Frame(Frame&& other) noexcept { *this = std::move(other); }
 
@@ -71,8 +69,6 @@ V4L2Capture::Frame& V4L2Capture::Frame::operator=(Frame&& other) noexcept {
 V4L2Capture::Frame::~Frame() {
     if (owner && index >= 0) owner->qbuf(index);
 }
-
-// -------- V4L2Capture --------
 
 void V4L2Capture::cleanupOnFail() {
     if (fd_ >= 0) {
@@ -99,7 +95,45 @@ void V4L2Capture::cleanupOnFail() {
     ok_ = false;
 }
 
-V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t pixfmt, int reqBufs)
+void V4L2Capture::try_set_fps_(int fps) {
+    if (fps <= 0) return;
+
+    v4l2_streamparm sp{};
+    sp.type = buf_type_;
+    if (xioctl(fd_, VIDIOC_G_PARM, &sp) < 0) {
+        // 有的驱动不支持，别当致命错误
+        std::fprintf(stderr, "[CAM] VIDIOC_G_PARM not supported\n");
+        return;
+    }
+
+    if (!(sp.parm.capture.capability & V4L2_CAP_TIMEPERFRAME)) {
+        std::fprintf(stderr, "[CAM] TIMEPERFRAME not supported by driver\n");
+        return;
+    }
+
+    sp.parm.capture.timeperframe.numerator = 1;
+    sp.parm.capture.timeperframe.denominator = (uint32_t)fps;
+
+    if (xioctl(fd_, VIDIOC_S_PARM, &sp) < 0) {
+        std::fprintf(stderr, "[CAM] VIDIOC_S_PARM set fps=%d failed: %s\n",
+                     fps, strerror(errno));
+        return;
+    }
+
+    // 读回确认实际生效值
+    v4l2_streamparm sp2{};
+    sp2.type = buf_type_;
+    if (xioctl(fd_, VIDIOC_G_PARM, &sp2) == 0) {
+        auto n = sp2.parm.capture.timeperframe.numerator;
+        auto d = sp2.parm.capture.timeperframe.denominator;
+        if (n == 0) n = 1;
+        double real_fps = (double)d / (double)n;
+        std::fprintf(stderr, "[CAM] FPS request=%d, applied timeperframe=%u/%u (%.2f fps)\n",
+                     fps, n, d, real_fps);
+    }
+}
+
+V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t pixfmt, int reqBufs, int fps)
     : width_(width), height_(height), pixfmt_(pixfmt) {
 
     ok_ = false;
@@ -111,7 +145,11 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
     if (reqBufs > 16) reqBufs = 16;
 
     fd_ = open(dev.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC);
-    if (fd_ < 0) { setError(errno_str("open v4l2 failed: " + dev)); cleanupOnFail(); return; }
+    if (fd_ < 0) {
+        setError(errno_str("open v4l2 failed: " + dev));
+        cleanupOnFail();
+        return;
+    }
 
     v4l2_capability cap{};
     if (xioctl(fd_, VIDIOC_QUERYCAP, &cap) < 0) {
@@ -120,7 +158,6 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
         return;
     }
 
-    // Many V4L2 drivers set V4L2_CAP_DEVICE_CAPS and expose the real caps in device_caps.
     const uint32_t caps = (cap.capabilities & V4L2_CAP_DEVICE_CAPS) ? cap.device_caps : cap.capabilities;
 
     const bool has_stream = (caps & V4L2_CAP_STREAMING) != 0;
@@ -132,19 +169,14 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
 
     const bool has_capture = (caps & V4L2_CAP_VIDEO_CAPTURE) != 0;
     const bool has_capture_mplane = (caps & V4L2_CAP_VIDEO_CAPTURE_MPLANE) != 0;
-
     if (!has_capture && !has_capture_mplane) {
         setError("device does not support VIDEO_CAPTURE");
         cleanupOnFail();
         return;
     }
 
-    // Prefer single-plane capture if supported; fallback to MPLANE.
     buf_type_ = has_capture ? V4L2_BUF_TYPE_VIDEO_CAPTURE : V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 
-    // -------------------------
-    // S_FMT
-    // -------------------------
     if (buf_type_ == V4L2_BUF_TYPE_VIDEO_CAPTURE) {
         v4l2_format fmt{};
         fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -164,9 +196,7 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
         pixfmt_ = fmt.fmt.pix.pixelformat;
 
         stride_ = (int)fmt.fmt.pix.bytesperline;
-        if (stride_ == 0) {
-            stride_ = default_stride_bytes(width_, pixfmt_);
-        }
+        if (stride_ == 0) stride_ = default_stride_bytes(width_, pixfmt_);
     } else {
         v4l2_format fmt{};
         fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -193,14 +223,12 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
         }
 
         stride_ = (int)fmt.fmt.pix_mp.plane_fmt[0].bytesperline;
-        if (stride_ == 0) {
-            stride_ = default_stride_bytes(width_, pixfmt_);
-        }
+        if (stride_ == 0) stride_ = default_stride_bytes(width_, pixfmt_);
     }
 
-    // -------------------------
-    // REQBUFS
-    // -------------------------
+    // ✅Commit J.2.2：在申请 buffer 之前设置 FPS（驱动通常要求此顺序）
+    try_set_fps_(fps);
+
     v4l2_requestbuffers req{};
     req.count = (uint32_t)reqBufs;
     req.type = buf_type_;
@@ -220,9 +248,6 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
     num_bufs_ = (int)req.count;
     bufs_.resize((size_t)num_bufs_);
 
-    // -------------------------
-    // QUERYBUF + MMAP + optional EXPBUF + QBUF
-    // -------------------------
     if (buf_type_ == V4L2_BUF_TYPE_VIDEO_CAPTURE) {
         for (uint32_t i = 0; i < (uint32_t)num_bufs_; ++i) {
             v4l2_buffer buf{};
@@ -247,7 +272,6 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
                 cleanupOnFail();
                 return;
             }
-
             bufs_[i].start0 = start0;
 
             v4l2_exportbuffer exp{};
@@ -255,11 +279,8 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
             exp.index = i;
             exp.plane = 0;
             exp.flags = O_CLOEXEC;
-            if (xioctl(fd_, VIDIOC_EXPBUF, &exp) == 0) {
-                bufs_[i].dma_fd0 = exp.fd;
-            } else {
-                bufs_[i].dma_fd0 = -1;
-            }
+            if (xioctl(fd_, VIDIOC_EXPBUF, &exp) == 0) bufs_[i].dma_fd0 = exp.fd;
+            else bufs_[i].dma_fd0 = -1;
 
             qbuf((int)i);
         }
@@ -291,7 +312,6 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
                 cleanupOnFail();
                 return;
             }
-
             bufs_[i].start0 = start0;
 
             v4l2_exportbuffer exp{};
@@ -299,19 +319,13 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
             exp.index = i;
             exp.plane = 0;
             exp.flags = O_CLOEXEC;
-            if (xioctl(fd_, VIDIOC_EXPBUF, &exp) == 0) {
-                bufs_[i].dma_fd0 = exp.fd;
-            } else {
-                bufs_[i].dma_fd0 = -1;
-            }
+            if (xioctl(fd_, VIDIOC_EXPBUF, &exp) == 0) bufs_[i].dma_fd0 = exp.fd;
+            else bufs_[i].dma_fd0 = -1;
 
             qbuf((int)i);
         }
     }
 
-    // -------------------------
-    // STREAMON
-    // -------------------------
     v4l2_buf_type type = (v4l2_buf_type)buf_type_;
     if (xioctl(fd_, VIDIOC_STREAMON, &type) < 0) {
         setError(errno_str("VIDIOC_STREAMON failed"));
@@ -324,7 +338,7 @@ V4L2Capture::V4L2Capture(const std::string& dev, int width, int height, uint32_t
 }
 
 V4L2Capture::~V4L2Capture() {
-    cleanupOnFail(); // safe, idempotent
+    cleanupOnFail();
     pthread_mutex_destroy(&q_mtx_);
 }
 
@@ -355,7 +369,6 @@ void V4L2Capture::qbuf(int index) {
         buf.m.planes = planes;
         buf.length = (uint32_t)num_planes_;
 
-        // Some strict drivers want these fields present
         planes[0].length = (uint32_t)bufs_[index].length0;
         planes[0].m.mem_offset = bufs_[index].offset0;
         planes[0].bytesused = 0;
@@ -370,9 +383,7 @@ void V4L2Capture::qbuf(int index) {
     pthread_mutex_unlock(&q_mtx_);
 }
 
-void V4L2Capture::requeue(int index) {
-    qbuf(index);
-}
+void V4L2Capture::requeue(int index) { qbuf(index); }
 
 int V4L2Capture::dqbuf(int timeout_ms, size_t& bytes_used, uint64_t& ts_us) {
     if (fd_ < 0) { setError("dqbuf on invalid fd"); return -1; }
@@ -382,11 +393,14 @@ int V4L2Capture::dqbuf(int timeout_ms, size_t& bytes_used, uint64_t& ts_us) {
     FD_SET(fd_, &fds);
 
     timeval tv{};
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    timeval* tv_ptr = (timeout_ms < 0) ? nullptr : &tv;
+    if (timeout_ms >= 0) {
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+    }
 
-    int r = select(fd_ + 1, &fds, nullptr, nullptr, &tv);
-    if (r == 0) return -1; // timeout
+    int r = select(fd_ + 1, &fds, nullptr, nullptr, tv_ptr);
+    if (r == 0) return -1;
     if (r < 0) { setError(errno_str("select failed")); return -1; }
 
     if (buf_type_ == V4L2_BUF_TYPE_VIDEO_CAPTURE) {

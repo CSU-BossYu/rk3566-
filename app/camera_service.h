@@ -16,6 +16,11 @@ public:
         uint32_t pixfmt = V4L2_PIX_FMT_YUYV;
         int req_bufs = 4;
         int timeout_ms = 1000;
+
+        int fps = 30; // <=0 表示不设置
+
+        // ✅相机侧 FPS 日志间隔（ms），0=禁用
+        int fps_log_interval_ms = 1000;
     };
 
     CameraService(RgaWorker* rga_worker,

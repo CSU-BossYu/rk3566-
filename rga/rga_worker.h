@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <thread>
+#include <cstdint>
 
 #include "capture/v4l2_capture.h"
 #include "rga/rga_preprocess.h"
@@ -17,6 +18,12 @@ public:
         int ui_out_h  = 480;
         int det_out_w = 320;
         int det_out_h = 320;
+
+        // --- 兼容 app_runtime.cpp：保留字段，但“最终版本”里不再通过它们调参 ---
+        // 你现在 app_runtime.cpp 在写这些字段，所以必须存在
+        int vision_every_n        = 1;    // 兼容字段：送入 vision 的 N 分之一（最终版忽略：每帧喂）
+        int vision_min_interval_ms= 0;    // 兼容字段：送入 vision 的最小间隔（最终版忽略）
+        int fps_log_interval_ms   = 1000; // 兼容字段：RGA fps log 间隔（最终版可继续固定 1000）
     };
 
     RgaWorker(ThreadSafeQueue<UiFramePacket, 8>* ui_q,
@@ -36,7 +43,7 @@ public:
 
     bool start();
     void join();
-    void stop(); // close internal queue
+    void stop();
 
     bool submit_ui(V4L2Capture::Frame&& fr);
 
@@ -58,4 +65,15 @@ private:
     ThreadSafeQueue<Job, 4> job_q_;
     std::thread th_;
     RgaPreprocess rga_;
+
+    // fps/prof
+    uint64_t last_log_ms_ = 0;
+    uint32_t cam_in_cnt_ = 0;
+    uint32_t ui_out_cnt_ = 0;
+    uint32_t vsn_out_cnt_ = 0;
+    uint32_t ui_drop_cnt_ = 0;
+    uint32_t vsn_drop_cnt_ = 0;
+
+    double sum_ui_ms_ = 0;
+    double sum_vsn_ms_ = 0;
 };

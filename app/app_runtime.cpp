@@ -84,19 +84,14 @@ struct AppRuntime::Impl {
     {
         stop.store(true);
 
-        // 先让 worker 关闭队列/停止工作
         if (vision) vision->stop();
         if (rga)    rga->stop();
 
-        // join：生产者先停
         if (cam)    cam->join();
         if (rga)    rga->join();
         if (vision) vision->join();
 
-        // UI 释放当前持有的帧 block（否则 pool 少一块）
         ui_app_deinit();
-
-        // 解绑 pipe，避免悬挂引用
         ui_app_bind_frame_pipe(nullptr, nullptr);
 
         delete cam; cam = nullptr;
@@ -133,7 +128,6 @@ bool AppRuntime::init(const Config& cfg)
     if (!p_) return false;
     p_->cfg = cfg;
 
-    // ✅环境变量兜底（仅当 cfg.db_path 为空时生效）
     if (p_->cfg.db_path.empty()) {
         const char* e = env_str("FACE_DB");
         if (e) p_->cfg.db_path = e;
@@ -145,7 +139,6 @@ bool AppRuntime::init(const Config& cfg)
     lv_init();
     p_->lv_inited = true;
 
-    // --- DRM display ---
     std::printf("[APP] drm_disp_drv_init...\n");
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
@@ -155,13 +148,10 @@ bool AppRuntime::init(const Config& cfg)
         return false;
     }
 
-    // 你之前用它规避局刷背景问题：保留
     disp_drv.full_refresh = 1;
-
     lv_disp_drv_register(&disp_drv);
     p_->drm_inited = true;
 
-    // --- EVDEV touch ---
     std::printf("[APP] evdev_init...\n");
     evdev_init();
     static lv_indev_drv_t indev_drv;
@@ -170,11 +160,9 @@ bool AppRuntime::init(const Config& cfg)
     indev_drv.read_cb = evdev_read;
     lv_indev_drv_register(&indev_drv);
 
-    // --- UI app ---
     std::printf("[APP] ui_app_init...\n");
     ui_app_init();
 
-    // --- UI pipe: pool + queue ---
     const uint32_t blk_bytes = (uint32_t)(p_->cfg.ui_out_w * p_->cfg.ui_out_h * 4);
     p_->ui_pool = new FixedBlockPool(blk_bytes,
                                     (uint32_t)p_->cfg.pool_blocks,
@@ -182,7 +170,6 @@ bool AppRuntime::init(const Config& cfg)
     p_->ui_q = new ThreadSafeQueue<UiFramePacket, 8>();
     ui_app_bind_frame_pipe(p_->ui_q, p_->ui_pool);
 
-    // --- Vision worker ---
     VisionWorker::Config vcfg;
     vcfg.cam_w = p_->cfg.cam_w;
     vcfg.cam_h = p_->cfg.cam_h;
@@ -190,8 +177,6 @@ bool AppRuntime::init(const Config& cfg)
     vcfg.det_h = 320;
     vcfg.ui_w  = p_->cfg.ui_out_w;
     vcfg.ui_h  = p_->cfg.ui_out_h;
-
-    // ✅DB path 注入
     vcfg.db_path = p_->cfg.db_path;
 
     p_->vision = new VisionWorker(&p_->stop, vcfg);
@@ -200,7 +185,6 @@ bool AppRuntime::init(const Config& cfg)
         return false;
     }
 
-    // --- RGA worker ---
     RgaWorker::Config rga_cfg;
     rga_cfg.ui_out_w  = p_->cfg.ui_out_w;
     rga_cfg.ui_out_h  = p_->cfg.ui_out_h;
@@ -213,7 +197,6 @@ bool AppRuntime::init(const Config& cfg)
         return false;
     }
 
-    // --- Camera service ---
     CameraService::Config cam_cfg;
     cam_cfg.dev = p_->cfg.cam_dev;
     cam_cfg.w = p_->cfg.cam_w;
@@ -245,7 +228,6 @@ int AppRuntime::run()
             p_->last_tick = now;
         }
 
-        // UI 合并渲染固定驱动
         ui_app_tick();
 
         if (!no_handler) {

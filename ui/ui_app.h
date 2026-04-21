@@ -14,7 +14,7 @@ extern "C" {
 #endif
 
 void ui_app_init(void);
-void ui_app_deinit(void);   // ✅新增：AppRuntime cleanup 用
+void ui_app_deinit(void);
 void ui_app_tick(void);
 
 ui_mode_t ui_app_get_mode(void);

@@ -45,21 +45,24 @@ option(ENABLE_RKNN   "Enable RKNN path (rknn/*)" ON)
 option(ALLOW_SHLIB_UNDEFINED "Allow unresolved symbols in linked shared libs" OFF)
 option(ENABLE_LVGL "Enable LVGL UI (DRM + EVDEV)" ON)
 
+# =========================
+# Sources
+# =========================
 set(SRC_LIST
   main.cpp
+
   app/app_runtime.cpp
   app/vision_worker.cpp
+  app/camera_service.cpp
+
   capture/v4l2_capture.cpp
   rga/rga_preprocess.cpp
   rga/rga_worker.cpp
-  app/camera_service.cpp
-)
 
-if(ENABLE_LVGL)
-  list(APPEND SRC_LIST
-    ui/ui_app.cpp
-  )
-endif()
+  utils/face_db.cpp
+
+  
+)
 
 if(ENABLE_OPENCV)
   list(APPEND SRC_LIST
@@ -75,9 +78,21 @@ if(ENABLE_RKNN)
   )
 endif()
 
-list(APPEND SRC_LIST
-  utils/face_db.cpp
-)
+if(ENABLE_LVGL)
+  list(APPEND SRC_LIST
+    ui/generated/ui.cpp
+
+    ui/ui_app.cpp
+    ui/ui_model.cpp
+    ui/ui_runtime.cpp
+    ui/ui_navigator.cpp
+    ui/ui_controller.cpp
+
+    ui/screens/screen_recog.cpp
+    ui/screens/screen_enroll.cpp
+    ui/screens/screen_manage.cpp
+  )
+endif()
 
 add_executable(${PROJECT_NAME} ${SRC_LIST})
 
@@ -114,14 +129,12 @@ if(ENABLE_RKNN)
   target_compile_definitions(${PROJECT_NAME} PRIVATE USE_RKNN=1)
 endif()
 
-set(DEPLOY_DIR     "${CMAKE_SOURCE_DIR}/deploy")
-set(DEPLOY_LIB_DIR "${DEPLOY_DIR}/lib")
-set(DEPLOY_MOD_DIR "${DEPLOY_DIR}/models")
-
 set_target_properties(${PROJECT_NAME} PROPERTIES
-  RUNTIME_OUTPUT_DIRECTORY "${DEPLOY_DIR}"
+  # 简化部署：adb push build/out/ 到开发板后直接运行 ./demo_rga_v4l2
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/out"
 )
 
+# 运行时从可执行文件旁边的 lib/ 加载
 set_target_properties(${PROJECT_NAME} PROPERTIES
   BUILD_RPATH "\$ORIGIN/lib"
   INSTALL_RPATH "\$ORIGIN/lib"
