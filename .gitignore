@@ -1,17 +1,44 @@
-# 编译构建目录（重点排除）
-build/
-# 备份文件
-*.bak
-# 临时文件
-*.tmp
-# 日志文件
+# Build output
+/build/*
+!/build/README.md
+/out/
+/cmake-build-*/
+
+# CMake / native build cache
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+compile_commands.json
+Makefile
+install_manifest.txt
+
+# IDE / editor metadata
+/.vscode/
+/.idea/
+*.vcxproj.user
+*.suo
+*.user
+
+# Logs and temp files
 *.log
-# 可执行文件
-*.out
-# 若app是编译产物目录也排除（非源码则注释掉）
-# app/
-# DRM/RGA临时文件
+*.tmp
+*.temp
+*.bak
+*.cache
+*.swp
+*.swo
+*.pid
+
+# OS-generated files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Local temporary files in vendor folders
 drm/*.tmp
 rga/*.tmp
-# VS Code 本地缓存文件
-.vscode/
